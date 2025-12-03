@@ -290,10 +290,16 @@ function unleap(){
 function set_hybrid_levels(){
   ifile=$1
   cdo -s invertlev ${ifile} s56
+  header=$(ncdump -h s56 2>/dev/null || ncdump -h "${ifile}" 2>/dev/null)
+  if echo "${header}" | grep -Fq 'a_bnds'; then
+          p0_value=$(ncdump -v p0 "${ifile}" | awk '/p0 =/ {print $3}' | tr -d ';')
+          ncap2 -O -s "ap=${p0_value}*a; ap_bnds=${p0_value}*a_bnds" s56 tmp_apb.nc
+          mv tmp_apb.nc s56
+  fi
   dump_coord_bnds ap_bnds s56 | awk '{print $1}' > ap_bnds.txt 
   dump_coord_bnds ap_bnds s56 | awk '{print $2}' | tail -1 >> ap_bnds.txt
-  dump_coord_bnds b_bnds  s56 | awk '{print $1}' > b_bnds.txt
-  dump_coord_bnds b_bnds  s56 | awk '{print $2}' | tail -1 >> b_bnds.txt
+  dump_coord_bnds b_bnds s56 | awk '{print $1}' > b_bnds.txt
+  dump_coord_bnds b_bnds s56 | awk '{print $2}' | tail -1 >> b_bnds.txt
   # Create hybrid coordinate coefficients for WRF
   paste -d ' ' ap_bnds.txt b_bnds.txt | nl -v0 > ecmwf_coeffs
   # Create a Z-axis description file (myzaxisinvert.dat) to convert nc files to grib ones.                            
@@ -306,6 +312,10 @@ vctsize   = $((2*${nlevels}+2))
 vct       = $(cat ap_bnds.txt b_bnds.txt)
 EOF
   cdo -s setzaxis,myzaxisinvert.dat s56 s57
+  ncks -O -x -v ap_2 s57 tmp.nc
+  mv tmp.nc s57
+  ncks -O -x -v ap_bnds_2 s57 tmp.nc
+  mv tmp.nc s57
   ncks -O -C -x -v ps s57 ${ifile}
   rm s56 s57 *_bnds.txt myzaxisinvert.dat 
 }
