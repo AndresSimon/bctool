@@ -53,7 +53,11 @@ function findfile(){
     | while read f; do
       idate=${f//*_/}; idate=${idate//-*/}
       lendate=${#idate}
-      iyear="${year}0101000000"; iyear="${iyear:0:${lendate}}"
+      if [[ "${imodel}" == "MPIESM12HR" ]]; then
+          iyear="${year}0101060000"; iyear="${iyear:0:${lendate}}"
+      else
+          iyear="${year}0101000000"; iyear="${iyear:0:${lendate}}"
+      fi
       fdate=${f//*_/}; fdate=${fdate//*-/}; fdate=${fdate//.*/}
       fyear="${year}1231180000"; fyear="${fyear:0:${lendate}}"
       if test ${iyear} -ge ${idate} -a ${fyear} -le ${fdate}; then
@@ -178,7 +182,13 @@ function time_slice(){
   else
     ifile=$(findfile ${filespec} ${year})
     cdo -s seldate,${sformateddate/_/T},${eformateddate/_/T} ${ifile} s84
-    cdo -s selyear,${year} s84 ${ofile} ; rm s84
+    if [[ ${year} -eq $((iyy - 1)) ]]; then # case MPI, as YYYY0101_00:00:00 is in YYYY-1 file
+       echo ${year} ${ifile}
+       cdo -s selyear,${iyy} s84 ${ofile} ; rm s84
+    else
+       echo ${year} ${ifile}
+       cdo -s selyear,${year} s84 ${ofile} ; rm s84
+    fi
     calendar=$(cdo -s -sinfo ${ofile} | grep Calendar | awk '{print $10}')
   fi
 }
@@ -292,11 +302,11 @@ function set_hybrid_levels(){
   cdo -s invertlev ${ifile} s56
   header=$(ncdump -h s56 2>/dev/null || ncdump -h "${ifile}" 2>/dev/null)
   if echo "${header}" | grep -Fq 'a_bnds'; then
-          p0_value=$(ncdump -v p0 "${ifile}" | awk '/p0 =/ {print $3}' | tr -d ';')
-          ncap2 -O -s "ap=${p0_value}*a; ap_bnds=${p0_value}*a_bnds" s56 tmp_apb.nc
-          mv tmp_apb.nc s56
+        p0_value=$(ncdump -v p0 "${ifile}" | awk '/p0 =/ {print $3}' | tr -d ';')
+        ncap2 -O -s "ap=${p0_value}*a; ap_bnds=${p0_value}*a_bnds" s56 tmp_apb.nc
+        mv tmp_apb.nc s56
   fi
-  dump_coord_bnds ap_bnds s56 | awk '{print $1}' > ap_bnds.txt 
+  dump_coord_bnds ap_bnds s56 | awk '{print $1}' > ap_bnds.txt
   dump_coord_bnds ap_bnds s56 | awk '{print $2}' | tail -1 >> ap_bnds.txt
   dump_coord_bnds b_bnds s56 | awk '{print $1}' > b_bnds.txt
   dump_coord_bnds b_bnds s56 | awk '{print $2}' | tail -1 >> b_bnds.txt
@@ -487,8 +497,11 @@ function set_extension(){
 #--------------------------------------------------------------------------
 timemsg BEGIN
 
-read iyy imm trash <<< `echo $sformateddate | tr '_T:-' '    '`
-read fyy fmm trash <<< `echo $eformateddate | tr '_T:-' '    '`
+read iyy imm idd ihh trash <<< `echo $sformateddate | tr '_T:-' '    '`
+read fyy fmm fdd fhh trash <<< `echo $eformateddate | tr '_T:-' '    '`
+arg3="$3"
+imodel="${arg3#*.}"
+
 tmpDir=`pwd`/BCdata
 mkdir -p ${tmpDir}
 cd ${tmpDir}
@@ -522,16 +535,25 @@ do
   timemsg "Processing ${variable}"
   case "$(echo ${project} | tr '[:upper:]' '[:lower:]')" in
     cmip5) drsdir="${extdata_path}/${experiment}/${frequency}/${realm}/${table}/${run}/${version}";;
-    cmip6) drsdir="${extdata_path}/${experiment}/${run}/${table}/*/gn/${version}";;
+    cmip6) drsdir="${extdata_path}/${experiment}/${run}/${table}/*/*/${version}";;
   esac
   filespec="${variable}_${table}_${model}_${experiment}_${run}*.nc"
   is_only_ic=0
-  for year in $(seq $iyy $fyy)
-  do
-    timemsg "  YEAR: ${year}"
-    apply_filter "${prefilter}|${filter}|${postfilter}"
-    test "${is_only_ic}" -eq 1 && break
-  done # year
+  if [[ $imm -eq "01" && $idd -eq "01" && $ihh -eq "00" && $imodel -eq "MPIESM12HR" ]]; then
+    for year in $(seq $((iyy - 1)) $fyy)
+    do
+      timemsg "  YEAR: ${year}"
+      apply_filter "${prefilter}|${filter}|${postfilter}"
+      test "${is_only_ic}" -eq 1 && break
+    done # year
+  else
+    for year in $(seq $iyy $fyy)
+    do
+      timemsg "  YEAR: ${year}"
+      apply_filter "${prefilter}|${filter}|${postfilter}"
+      test "${is_only_ic}" -eq 1 && break
+    done # year
+  fi
 done # while read
 
 # Deleting dat files
