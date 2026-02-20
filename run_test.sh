@@ -76,10 +76,10 @@ function updatenml(){
 #--------------------------------------------------------------------------
 #  Downloading and preparing WPS and WRF binaries
 #--------------------------------------------------------------------------
-HOMEDIR=`pwd`
-WRFDIR=${WRFDIR:-WRF}
-./util/deploy_WRF_CMake_binaries.sh ${WRFDIR}
-cd $HOMEDIR/$WRFDIR
+#HOMEDIR=`pwd`
+#WRFDIR=${WRFDIR:-WRF}
+#./util/deploy_WRF_CMake_binaries.sh ${WRFDIR}
+#cd $HOMEDIR/$WRFDIR
 
 #--------------------------------------------------------------------------
 #  Running WPS

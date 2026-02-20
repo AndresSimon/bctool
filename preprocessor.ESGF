@@ -19,6 +19,7 @@ test "${BCTABLE}" = ${BCTABLE#/} && BCTABLE=`pwd`/${BCTABLE}
 wrfpostfilter="convert2grb|set_grb_code|set_grb_ltype|set_extension(grb)|unleap"
 prefilter="time_slice"
 postfilter="maskregion|${wrfpostfilter}"
+#postfilter=${wrfpostfilter}
 
 #--------------------------------------------------------------------------
 #Functions
@@ -55,11 +56,13 @@ function findfile(){
       lendate=${#idate}
       if [[ "${imodel}" == "MPIESM12HR" ]]; then
           iyear="${year}0101060000"; iyear="${iyear:0:${lendate}}"
+          fdate=${f//*_/}; fdate=${fdate//*-/}; fdate=${fdate//.*/}
+	  fyear="$((year+1))0101000000"; fyear="${fyear:0:${lendate}}"
       else
           iyear="${year}0101000000"; iyear="${iyear:0:${lendate}}"
+          fdate=${f//*_/}; fdate=${fdate//*-/}; fdate=${fdate//.*/}
+          fyear="${year}1231180000"; fyear="${fyear:0:${lendate}}"
       fi
-      fdate=${f//*_/}; fdate=${fdate//*-/}; fdate=${fdate//.*/}
-      fyear="${year}1231180000"; fyear="${fyear:0:${lendate}}"
       if test ${iyear} -ge ${idate} -a ${fyear} -le ${fdate}; then
         echo ${f}
         break
@@ -153,10 +156,16 @@ size      = 1
 levels    = 10
 EOF
 cat << EOF > region.dat      
--40.0 10.0
--80.0 90.0
-100.0 90.0
-60.0 10.0
+# Europe
+#-40.0 10.0
+#-80.0 90.0
+#100.0 90.0
+#60.0 10.0
+# South America (lon lat)
+-115 -70  # south west
+-115 30   # north west
+-5 30     # north east
+-5 -70    # south east
 EOF
 }
 
@@ -180,16 +189,35 @@ function time_slice(){
     ifile=$(find ${drsdir} -type f -name "${filespec}" | head -n 1)
     copy ${ifile} ${ofile}
   else
-    ifile=$(findfile ${filespec} ${year})
-    cdo -s seldate,${sformateddate/_/T},${eformateddate/_/T} ${ifile} s84
-    if [[ ${year} -eq $((iyy - 1)) ]]; then # case MPI, as YYYY0101_00:00:00 is in YYYY-1 file
-       echo ${year} ${ifile}
-       cdo -s selyear,${iyy} s84 ${ofile} ; rm s84
+    ifile=$(findfile ${filespec} ${year_prime})
+    count=$(cdo -s -ntime -seldate,${sformateddate/_/T},${eformateddate/_/T} ${ifile} 2>/dev/null || echo 0)
+    if [[ -n "$count" && "$count" -gt 0 ]]; then
+      cdo -s seldate,${sformateddate/_/T},${eformateddate/_/T} ${ifile} s84 
     else
-       echo ${year} ${ifile}
-       cdo -s selyear,${year} s84 ${ofile} ; rm s84
+      echo "Saltando: No hay datos entre $sformateddate y $eformateddate en ${ifile}"
+      return 0
     fi
-    calendar=$(cdo -s -sinfo ${ofile} | grep Calendar | awk '{print $10}')
+    echo ${year_prime} ${year}
+    if [[ ${year_prime} -eq $((year - 1)) ]]; then # case MPI, as YYYY0101_00:00:00 is in YYYY-1 file
+       echo ${year_prime} ${ifile} ${year}
+       cdo -s selyear,${year} s84 s85 ; rm s84
+    else
+       if [[ $imodel == "MPIESM12HR" ]]; then
+	  if [ -f "s85" ]; then
+	    cdo -s selyear,${year_prime} s84 s86 ; rm s84
+	    ncrcat s85 s86 ${ofile} ; rm s85 ; rm s86
+            calendar=$(cdo -s -sinfo ${ofile} | grep Calendar | awk '{print $10}')
+	  else
+            cdo -s selyear,${year_prime} s84 ${ofile} ; rm s84
+            calendar=$(cdo -s -sinfo ${ofile} | grep Calendar | awk '{print $10}')
+	  fi
+          echo ${year_prime} ${ifile}
+       else
+          cdo -s selyear,${year_prime} s84 ${ofile} ; rm s84
+          calendar=$(cdo -s -sinfo ${ofile} | grep Calendar | awk '{print $10}')
+       fi
+    fi
+    echo "${ofile}"
   fi
 }
 
@@ -418,6 +446,11 @@ EOF
   rm ${ifile} myzaxis${lower_cm}_${upper_cm}.dat soilt*.nc
 }
 
+#function pa_to_hpa(){
+#  ifile=${1}
+#  ncap2 -s 'plev=plev/100.; plev@units="hPa"' input.nc output.nc
+#}
+
 function split_soil_mois_grb(){
   # NOTE: Depth variable inicating the layer depth  (middle) should exist in the file
   ifile=$1
@@ -455,6 +488,7 @@ EOF
 # set grid codes with ecCodes package developed by ECMWF
 function ecc_set_grb_code(){
   ifile=$1
+
   grib_set -s indicatorOfParameter=${gribcode} ${ifile} s51
   mv s51 ${ifile}
 }
@@ -469,6 +503,7 @@ function ecc_set_grb_ltype(){
 function convert2grb(){
   ifile=$1
   cdo -s -a -f grb copy ${ifile} s56
+  cp ${ifile} test0.nc
   mv s56 ${ifile}
 }
 
@@ -480,7 +515,8 @@ function set_grb_code(){
 
 function set_grb_ltype(){
   ifile=$1
-  cdo -s setltype,${ltype} ${ifile} s52
+  #cdo -s setltype,${ltype} ${ifile} s52
+  grib_set -s indicatorOfTypeOfLevel=${ltype} ${ifile} s52
   mv s52 ${ifile}
 }
 
@@ -505,7 +541,6 @@ imodel="${arg3#*.}"
 tmpDir=`pwd`/BCdata
 mkdir -p ${tmpDir}
 cd ${tmpDir}
-
 write_static_files
 
 project=$(bctable_header project)
@@ -539,17 +574,26 @@ do
   esac
   filespec="${variable}_${table}_${model}_${experiment}_${run}*.nc"
   is_only_ic=0
-  if [[ $imm -eq "01" && $idd -eq "01" && $ihh -eq "00" && $imodel -eq "MPIESM12HR" ]]; then
-    for year in $(seq $((iyy - 1)) $fyy)
+  echo ${frequency}
+  echo ${filter}
+  if [[ $imodel == "MPIESM12HR" && ${frequency} != "fx" && ${filter} != *BEGIN* ]]; then # period contains 2 years, hence 1st Jan is included
+    # This is to consider that MPIESM model outputs start at 0600 and ends in year+1 00:00
+    for year in $(seq $iyy $fyy)
     do
-      timemsg "  YEAR: ${year}"
-      apply_filter "${prefilter}|${filter}|${postfilter}"
+      echo " ${prefilter}"
+      for year_prime in $(seq $((year -1)) $year)
+      do
+        timemsg "  YEAR: ${year_prime}"
+        apply_filter "${prefilter}"
+      done # year_prime
+      apply_filter "${filter}|${postfilter}"
       test "${is_only_ic}" -eq 1 && break
     done # year
   else
     for year in $(seq $iyy $fyy)
     do
       timemsg "  YEAR: ${year}"
+      year_prime=${year}
       apply_filter "${prefilter}|${filter}|${postfilter}"
       test "${is_only_ic}" -eq 1 && break
     done # year
